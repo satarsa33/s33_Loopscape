@@ -1,7 +1,7 @@
 {
   "id": "./",
-  "name": "Loopscape",
-  "short_name": "Loopscape",
+  "name": "S33 - Loopscape",
+  "short_name": "S33 Loopscape",
   "description": "Disegna linee e punti: una playhead in loop li trasforma in droni, arpeggi e percussioni ambient.",
   "lang": "it",
   "start_url": "./",
