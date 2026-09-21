@@ -78,8 +78,8 @@ body{
 }
 
 .pop{
-  display:none; position:absolute; left:12px; top:12px; z-index:6; box-sizing:border-box;
-  width:min(348px, calc(100% - 24px)); max-height:calc(100% - 24px); overflow:auto;
+  display:none; position:absolute; left:12px; top:40px; z-index:6; box-sizing:border-box;
+  width:min(348px, calc(100% - 24px)); max-height:calc(100% - 52px); overflow:auto;
   background:var(--sheet); color:var(--ink); border:1px solid var(--line); border-radius:18px;
   padding:14px 14px 12px; box-shadow:0 12px 36px rgba(10,12,18,.28); touch-action:pan-y;
 }
@@ -186,7 +186,7 @@ select{
       <div id="rhPatterns" class="grp" role="group" aria-label="Schema ritmico"></div>
       <div class="lab">Battute per giro</div>
       <div id="rhBars" class="grp" role="group" aria-label="Battute per giro"></div>
-      <div class="head"><label for="rhLoop">Durata del loop</label><output id="rhLoopOut"></output></div>
+      <div class="head"><label for="rhLoop">Durata (lavagna intera)</label><output id="rhLoopOut"></output></div>
       <input id="rhLoop" type="range" min="6" max="90" step="1" value="45">
       <div class="head"><label for="rhLevel">Intensità</label></div>
       <input id="rhLevel" type="range" min="0" max="100" value="45">
@@ -216,8 +216,12 @@ select{
 <section id="sheet" aria-label="Impostazioni">
   <div class="sheet-h"><strong>Impostazioni</strong><button id="btnClose" class="btn" type="button">Chiudi</button></div>
   <div class="row">
-    <div class="head"><label for="loop">Durata del loop</label><output id="loopOut">45 s</output></div>
+    <div class="head"><label for="loop">Durata (lavagna intera)</label><output id="loopOut">45 s</output></div>
     <input id="loop" type="range" min="6" max="90" step="1" value="45">
+  </div>
+  <div class="row">
+    <div class="head"><label>Regione di loop</label><output id="regOut">intera lavagna</output></div>
+    <button id="btnReg" class="btn wide" type="button">Loop sull'intera lavagna</button>
   </div>
   <div class="row two">
     <label>Tonalità<select id="rootSel"></select></label>
@@ -273,6 +277,7 @@ select{
       <li><b>Pad</b> (verde): note lunghe e morbide dell'accordo.</li>
       <li><b>Striscia in basso</b>: il ritmo. Ogni riga è uno strumento (bongo alto, bongo basso, legno, marimba, vetro). Tocca per mettere un colpo, trascina per una serie regolare. I colpi si agganciano alla griglia e si ripetono identici a ogni giro. Lo spessore sceglie l'intensità.</li>
       <li><b>Ritmo</b> (in alto): un ritmo di fondo leggero, sempre disponibile. Ha tante battute quante ne scegli per ogni giro, quindi segue la durata del loop: accorciandola, accelera.</li>
+          <li><b>Barra del loop</b> (in cima alla lavagna): trascina le due maniglie per loopare solo una regione, la zona blu per spostarla, doppio tap per tornare all'intera lavagna. La velocità resta costante: una regione più corta dura meno.</li>
     </ul>
     <p style="margin:10px 0 0">Sopra la striscia le note sono acute in alto e gravi in basso. Bongo, legno e marimba si accordano da soli con l'accordo del quarto di lavagna in cui cadono.</p>
   </div>
@@ -333,6 +338,7 @@ const S = {
   rootSel: 'rand', modeSel: 'rand', evo: 4, steps: 64,
   volume: 0.7, reverb: 0.6, noteGrid: true, mix: { drone: 1, note: 1, perc: 1 },
   rhythm: { on: false, pattern: 0, bars: 8, level: 0.45 }, rhythmEvents: [],
+  loopA: 0, loopB: 1,
   root: 0, mode: 0, prog: PROGS[0], scalePcs: new Set(), scaleNotes: [], sections: []
 };
 
@@ -401,6 +407,8 @@ let cw = 0, ch = 0, dpr = 1, hintVisible = true;
 const scale = () => clamp(Math.min(cw, ch) / 800, 0.7, 1.5);
 const widthPx = t => (2 + t * 26) * scale();
 const dotR = t => (5 + t * 9) * scale();
+const RULER = 30;                                   // altezza della barra del loop
+const hx = v => clamp(v * cw, 10, cw - 10);         // posizione visibile delle maniglie
 const FONT = 'ui-rounded, "SF Pro Rounded", system-ui, -apple-system, "Segoe UI", sans-serif';
 
 function resize() {
@@ -480,7 +488,7 @@ function drawBase() {
   for (let k = 0; k < 4; k++) {
     if (k > 0) { c.fillStyle = 'rgba(0,0,0,0.05)'; c.fillRect(Math.round(cw * k / 4), 0, 1, sy); }
     c.fillStyle = 'rgba(0,0,0,0.38)';
-    c.fillText(S.sections[k].name, cw * k / 4 + 10, 20);
+    c.fillText(S.sections[k].name, cw * k / 4 + 10, 46);
   }
 
   // griglia delle note (solo sopra la striscia)
@@ -492,7 +500,7 @@ function drawBase() {
       const isRoot = (m % 12) === S.root;
       c.fillStyle = isRoot ? 'rgba(0,0,0,0.09)' : 'rgba(0,0,0,0.06)';
       c.fillRect(0, Math.round(y), isRoot ? cw : 10, 1);
-      if (isRoot && y > 30) {
+      if (isRoot && y > 56) {
         c.fillStyle = 'rgba(0,0,0,0.38)';
         c.fillText(NOTE[m % 12] + (Math.floor(m / 12) - 1), 14, y - 4);
       }
@@ -543,9 +551,40 @@ function drawFx(now) {
     c.beginPath(); c.arc(r.x * cw, r.y * ch, 8 + age * 30 * scale(), 0, Math.PI * 2); c.stroke();
   }
   c.globalAlpha = 1;
+  drawRegion(c);
   if (erasing && eraserPos) {
     c.strokeStyle = 'rgba(0,0,0,0.5)'; c.lineWidth = 1.5;
     c.beginPath(); c.arc(eraserPos.px, eraserPos.py, 14 * scale(), 0, Math.PI * 2); c.stroke();
+  }
+}
+
+function drawRegion(c) {
+  c.fillStyle = 'rgba(20,24,40,0.05)'; c.fillRect(0, 0, cw, RULER);
+  c.fillStyle = 'rgba(20,24,40,0.12)'; c.fillRect(0, RULER, cw, 1);
+  const full = S.loopA <= 0 && S.loopB >= 1;
+  const xa = S.loopA * cw, xb = S.loopB * cw;
+  if (!full) {
+    c.fillStyle = 'rgba(20,24,40,0.085)';
+    c.fillRect(0, RULER + 1, xa, ch - RULER - 1);
+    c.fillRect(xb, RULER + 1, cw - xb, ch - RULER - 1);
+  }
+  c.fillStyle = 'rgba(47,79,216,0.18)'; c.fillRect(xa, 0, xb - xa, RULER);
+  c.strokeStyle = 'rgba(47,79,216,0.75)'; c.lineWidth = 2; c.setLineDash([6, 5]);
+  c.beginPath();
+  if (S.loopA > 0) { c.moveTo(xa, RULER); c.lineTo(xa, ch); }
+  if (S.loopB < 1) { c.moveTo(xb, RULER); c.lineTo(xb, ch); }
+  c.stroke(); c.setLineDash([]);
+  for (const v of [S.loopA, S.loopB]) {
+    const h = hx(v);
+    c.fillStyle = '#2f4fd8';
+    c.beginPath();
+    if (c.roundRect) c.roundRect(h - 8, 3, 16, 24, 6); else c.rect(h - 8, 3, 16, 24);
+    c.fill();
+    c.fillStyle = 'rgba(255,255,255,0.85)'; c.fillRect(h - 3, 9, 1.5, 12); c.fillRect(h + 1.5, 9, 1.5, 12);
+  }
+  if (full) {
+    c.fillStyle = 'rgba(20,24,40,0.45)'; c.font = '600 11px ' + FONT; c.textAlign = 'left';
+    c.fillText('LOOP · trascina le maniglie', 28, 19);
   }
 }
 
@@ -847,13 +886,16 @@ let lastT = performance.now();
 function frame(now) {
   const dt = clamp((now - lastT) / 1000, 0, 0.1); lastT = now;
   if (S.playing) {
-    const prev = S.phase; let cur = prev + dt / S.loopSec;
-    if (cur >= 1) {
-      cur -= 1;
-      processEvents(prev, 1.0001);
+    const A0 = S.loopA, B0 = S.loopB;
+    if (S.phase < A0 || S.phase > B0) S.phase = A0 - 1e-6;   // la playhead resta nella regione
+    const prev = S.phase; let cur = prev + dt / S.loopSec;   // velocità costante
+    if (cur >= B0) {
+      const over = cur - B0;
+      processEvents(prev, B0 >= 1 ? 1.0001 : B0 - 1e-9);
       S.loops++;
       if (S.evo > 0 && S.loops % S.evo === 0) modulate();
-      processEvents(-0.0001, cur);
+      cur = A0 + Math.min(over, B0 - A0 - 1e-6);
+      processEvents(A0 - 1e-4, cur);
     } else processEvents(prev, cur);
     S.phase = cur;
     updateGates(cur, now);
@@ -884,12 +926,12 @@ function play() {
   initAudio();
   lockScreen();
   if (A.ctx.state !== 'running') A.ctx.resume().catch(() => {});
-  S.playing = true; S.phase = 0; S.loops = 0; lastT = performance.now();
+  S.playing = true; S.phase = S.loopA - 1e-6; S.loops = 0; lastT = performance.now();
   for (const st of S.strokes) st.active = false;
   ui();
 }
 function stop() {
-  S.playing = false; S.phase = 0; unlockScreen();
+  S.playing = false; S.phase = S.loopA; unlockScreen();
   for (const st of S.strokes) { killStroke(st); st.active = false; st.lastM = null; }
   ui();
 }
@@ -951,7 +993,7 @@ function setLoop(v, noSave) {
   S.loopSec = clamp(v, 6, 90);
   $('#loop').value = S.loopSec; $('#rhLoop').value = S.loopSec;
   $('#loopOut').textContent = S.loopSec + ' s'; $('#rhLoopOut').textContent = S.loopSec + ' s';
-  rhythmUI(); if (!noSave) save();
+  updateLoopUI(); rhythmUI(); if (!noSave) save();
 }
 $('#loop').addEventListener('input', e => setLoop(+e.target.value));
 $('#rhLoop').addEventListener('input', e => setLoop(+e.target.value));
@@ -974,7 +1016,7 @@ function rhythmUI() {
     ' s. Il ritmo segue la durata del loop: accorciandola, accelera.';
   $('#rhLevel').value = Math.round(R.level * 100);
 }
-function rhythmChanged() { buildRhythm(); rhythmUI(); applyMix(); drawBase(); save(); }
+function rhythmChanged() { buildRhythm(); resnapLoop(); rhythmUI(); applyMix(); drawBase(); save(); }
 RH_PATTERNS.forEach((p, i) => {
   const b = document.createElement('button'); b.type = 'button'; b.className = 'cb'; b.dataset.i = i; b.textContent = p.name;
   b.addEventListener('click', () => { S.rhythm.pattern = i; S.rhythm.on = true; rhythmChanged(); });
@@ -1004,7 +1046,48 @@ for (const k of ['drone', 'note', 'perc']) {
 }
 
 /* ---------- disegno con il puntatore ---------- */
-let drawing = null, activePid = null, lastPen = 0, erasing = false, eraserPos = null;
+/* regione di loop: due maniglie sulla barra in cima */
+let loopDrag = null, lastRulerTap = 0;
+function loopStep() { return S.rhythm.on ? Math.min(0.25, 1 / S.rhythm.bars) : 1 / 16; }
+function snapLoop(v) { const st = loopStep(); return clamp(Math.round(v / st) * st, 0, 1); }
+function setLoopRegion(a, b) {
+  const st = loopStep();
+  a = clamp(a, 0, 1 - st); b = clamp(b, a + st, 1);
+  S.loopA = a; S.loopB = b;
+  if (S.phase < a || S.phase > b) S.phase = S.playing ? a - 1e-6 : a;
+  updateLoopUI(); save();
+}
+function resetRegion() { S.loopA = 0; S.loopB = 1; updateLoopUI(); save(); }
+function resnapLoop() { setLoopRegion(snapLoop(S.loopA), snapLoop(S.loopB)); }
+function updateLoopUI() {
+  const full = S.loopA <= 0 && S.loopB >= 1, dur = (S.loopB - S.loopA) * S.loopSec;
+  $('#regOut').textContent = full ? 'intera lavagna' : dur.toFixed(1).replace('.', ',') + ' s';
+  $('#btnReg').disabled = full;
+}
+function startLoopDrag(lp) {
+  const xa = hx(S.loopA), xb = hx(S.loopB), dA = Math.abs(lp.px - xa), dB = Math.abs(lp.px - xb);
+  let mode;
+  if (Math.min(dA, dB) <= 28) mode = dA < dB ? 'A' : dB < dA ? 'B' : (lp.px < xa ? 'A' : 'B');
+  else if (lp.px > xa && lp.px < xb) mode = 'M';
+  else mode = dA < dB ? 'A' : 'B';
+  loopDrag = { mode, startPx: lp.px, a0: S.loopA, b0: S.loopB, moved: false };
+}
+function updateLoopDrag(lp) {
+  const d = loopDrag, st = loopStep();
+  if (Math.abs(lp.px - d.startPx) > 4) d.moved = true;
+  if (!d.moved) return;
+  const v = lp.px / cw;
+  if (d.mode === 'A') setLoopRegion(Math.min(snapLoop(v), S.loopB - st), S.loopB);
+  else if (d.mode === 'B') setLoopRegion(S.loopA, Math.max(snapLoop(v), S.loopA + st));
+  else {
+    const w = d.b0 - d.a0;
+    const a = clamp(snapLoop(d.a0 + (lp.px - d.startPx) / cw), 0, 1 - w);
+    setLoopRegion(a, a + w);
+  }
+}
+$('#btnReg').addEventListener('click', resetRegion);
+
+let drawing = null, activePid = null, lastPen = -1e9, erasing = false, eraserPos = null;
 
 function addPt(e) {
   const r = fx.getBoundingClientRect();
@@ -1054,6 +1137,8 @@ fx.addEventListener('pointerdown', e => {
   e.preventDefault();
   activePid = e.pointerId;
   try { fx.setPointerCapture(e.pointerId); } catch (_) {}
+  const lp0 = localPos(e);
+  if (lp0.py <= RULER + 4) { startLoopDrag(lp0); return; }
   if (S.tool === 'e') {
     erasing = true; eraserPos = localPos(e); eraseAt(eraserPos.px, eraserPos.py); return;
   }
@@ -1064,6 +1149,7 @@ fx.addEventListener('pointerdown', e => {
 fx.addEventListener('pointermove', e => {
   if (e.pointerId !== activePid) return;
   e.preventDefault();
+  if (loopDrag) { updateLoopDrag(localPos(e)); return; }
   if (erasing) { eraserPos = localPos(e); eraseAt(eraserPos.px, eraserPos.py); return; }
   if (!drawing) return;
   const list = e.getCoalescedEvents ? e.getCoalescedEvents() : [];
@@ -1072,6 +1158,13 @@ fx.addEventListener('pointermove', e => {
 function endPointer(e) {
   if (e.pointerId !== activePid) return;
   activePid = null;
+  if (loopDrag) {
+    if (!loopDrag.moved) {                       // doppio tap sulla barra: torna all'intera lavagna
+      const now = performance.now();
+      if (now - lastRulerTap < 350) { resetRegion(); lastRulerTap = 0; } else lastRulerTap = now;
+    }
+    loopDrag = null; return;
+  }
   if (erasing) { erasing = false; eraserPos = null; return; }
   if (drawing && drawing.pts.length) {
     const st = finalize(drawing);
@@ -1103,7 +1196,7 @@ function save() {
     try {
       localStorage.setItem(KEY, JSON.stringify({
         v: 2,
-        set: { loopSec: S.loopSec, rootSel: S.rootSel, modeSel: S.modeSel, evo: S.evo, steps: S.steps, volume: S.volume, reverb: S.reverb, noteGrid: S.noteGrid, thick: S.thick, tool: S.tool, mix: S.mix, rhythm: S.rhythm },
+        set: { loopSec: S.loopSec, rootSel: S.rootSel, modeSel: S.modeSel, evo: S.evo, steps: S.steps, volume: S.volume, reverb: S.reverb, noteGrid: S.noteGrid, thick: S.thick, tool: S.tool, mix: S.mix, rhythm: S.rhythm, loop: [S.loopA, S.loopB] },
         strokes: S.strokes.map(st => st.mode === 'perc'
           ? { c: st.color, e: st.events.map(v => [+v.x.toFixed(4), v.lane, +v.t.toFixed(2)]) }
           : { c: st.color, p: st.pts.map(p => [+p.x.toFixed(4), +p.y.toFixed(4), +p.t.toFixed(2)]) })
@@ -1132,6 +1225,10 @@ function load() {
       if (Number.isInteger(r.pattern) && r.pattern >= 0 && r.pattern < RH_PATTERNS.length) S.rhythm.pattern = r.pattern;
       if (RH_BARS.includes(r.bars)) S.rhythm.bars = r.bars;
       if (typeof r.level === 'number') S.rhythm.level = clamp(r.level, 0, 1);
+    }
+    if (Array.isArray(s.loop) && typeof s.loop[0] === 'number' && typeof s.loop[1] === 'number') {
+      const a = clamp(s.loop[0], 0, 1), b = clamp(s.loop[1], 0, 1);
+      if (b - a >= 1 / 16 - 1e-9) { S.loopA = a; S.loopB = b; }
     }
     const out = [];
     for (const x of (d.strokes || [])) {
@@ -1163,7 +1260,9 @@ resize();
 load();
 syncControls();
 buildRhythm();
+S.phase = S.loopA;
 rhythmUI();
+updateLoopUI();
 ui();
 for (const st of S.strokes) if (st.mode === 'bell' || st.mode === 'pad') st.events = resample(st);
 drawBase();
