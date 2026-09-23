@@ -256,9 +256,11 @@ select{
   <div class="row">
     <label>Griglia magnetica (area di disegno)
       <select id="snapSel">
-        <option value="8">Larga, 8 colonne</option>
-        <option value="16">Media, 16 colonne</option>
-        <option value="32">Fitta, 32 colonne</option>
+        <option value="8">8 colonne</option>
+        <option value="16">16 colonne</option>
+        <option value="32">32 colonne</option>
+        <option value="64">64 colonne, fitta</option>
+        <option value="128">128 colonne, fittissima</option>
       </select>
     </label>
   </div>
@@ -283,7 +285,7 @@ select{
       <li><b>Pad</b> (verde): note lunghe e morbide dell'accordo.</li>
       <li><b>Magnete</b>: attiva una griglia nell'area di disegno; i tratti si agganciano alle colonne e alle note della scala, per linee dritte e precise.</li>
       <li><b>Striscia in basso</b>: il ritmo. Ogni riga è uno strumento (bongo alto, bongo basso, legno, marimba, vetro). Tocca per mettere un colpo, trascina per una serie regolare. I colpi si agganciano alla griglia e si ripetono identici a ogni giro. Lo spessore sceglie l'intensità.</li>
-      <li><b>Ritmo</b> (in alto): un piccolo step sequencer sempre disponibile, con 4 o 8 passi a scelta. Tocca le celle per accendere o spegnere un colpo: i passi coprono sempre un giro intero (o la regione di loop), quindi restano in sincrono per costruzione.</li>
+      <li><b>Ritmo</b> (in alto): un piccolo step sequencer sempre disponibile, con 4 o 8 passi a scelta. Tocca le celle per accendere o spegnere un colpo: la sequenza si ripete a ogni accordo (ogni quarto della lavagna), quindi resta sempre in sincrono, anche loopando solo una regione.</li>
           <li><b>Barra del loop</b> (in cima alla lavagna): trascina le due maniglie per loopare solo una regione, la zona blu per spostarla, doppio tap per tornare all'intera lavagna. La velocità resta costante: una regione più corta dura meno.</li>
     </ul>
     <p style="margin:10px 0 0">Sopra la striscia le note sono acute in alto e gravi in basso. Bongo, legno e marimba si accordano da soli con l'accordo del quarto di lavagna in cui cadono.</p>
@@ -328,7 +330,10 @@ function buildRhythm() {
     for (let v = 0; v < STEP_VOICES.length; v++) {
       const [id] = STEP_VOICES[v], row = R.grid[id];
       if (!row) continue;
-      for (let st = 0; st < R.steps; st++) if (row[st]) ev.push({ x: st / R.steps, v: id, t: 0.55 + Math.random() * 0.25 });
+      for (let st = 0; st < R.steps; st++) if (row[st]) {
+        // la sequenza si ripete a ogni accordo (ogni quarto della lavagna)
+        for (let q = 0; q < 4; q++) ev.push({ x: q / 4 + st / (4 * R.steps), v: id, t: 0.55 + Math.random() * 0.25 });
+      }
     }
   }
   S.rhythmEvents = ev;
@@ -466,11 +471,10 @@ function drawBase() {
   c.fillStyle = 'rgba(120,90,210,0.4)'; c.fillRect(0, Math.round(sy), cw, 1);
   for (let l = 1; l < NL; l++) { c.fillStyle = 'rgba(120,90,210,0.14)'; c.fillRect(0, Math.round(sy + l * lh), cw, 1); }
   if (S.rhythm.on) {
-    const nb = S.rhythm.steps;
-    for (let k = 0; k < nb; k++) {
-      const x = Math.round(cw * k / nb);
+    for (let q = 0; q < 4; q++) for (let k = 0; k < S.rhythm.steps; k++) {
+      const x = Math.round(cw * (q / 4 + k / (4 * S.rhythm.steps)));
       c.fillStyle = 'rgba(120,90,210,0.55)';
-      c.fillRect(x, sy - 9, 1, 9);
+      c.fillRect(x, sy - (k === 0 ? 13 : 9), 1, k === 0 ? 13 : 9);
     }
   }
   if (S.steps > 0) {
@@ -1051,9 +1055,9 @@ function rhythmUI() {
   $('#rhOn').checked = R.on; btnRh.classList.toggle('live', R.on);
   document.querySelectorAll('#rhSteps .cb').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.n === R.steps)));
   document.querySelectorAll('#rhGrid .rh-cell').forEach(b => b.classList.toggle('on', !!rhCell(b.dataset.v, +b.dataset.st)));
-  const span = S.loopB - S.loopA, stepS = span * S.loopSec / R.steps;
+  const stepS = (S.loopSec / 4) / R.steps;
   $('#rhInfo').textContent = 'un passo ogni ' + stepS.toFixed(2).replace('.', ',') +
-    ' s. Copre sempre un giro intero (o la regione di loop attiva).';
+    ' s: la sequenza si ripete a ogni accordo, quindi 4 volte per giro.';
 }
 function rhythmChanged() { buildRhythm(); resnapLoop(); rhythmUI(); applyMix(); drawBase(); save(); }
 STEP_COUNTS.forEach(n => {
@@ -1086,7 +1090,7 @@ for (const [k, label] of MIX_CH) {
 /* ---------- disegno con il puntatore ---------- */
 /* regione di loop: due maniglie sulla barra in cima */
 let loopDrag = null, lastRulerTap = 0;
-function loopStep() { return S.rhythm.on ? 1 / S.rhythm.steps : 1 / 16; }
+function loopStep() { return S.rhythm.on ? 1 / (4 * S.rhythm.steps) : 1 / 16; }
 function snapLoop(v) { const st = loopStep(); return clamp(Math.round(v / st) * st, 0, 1); }
 function setLoopRegion(a, b) {
   const st = loopStep();
