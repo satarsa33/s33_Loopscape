@@ -70,6 +70,7 @@ body{
 .brand .key{ font:600 12px/1.2 var(--font); color:var(--muted); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; max-width:100%; }
 #btnSettings{ order:2; }
 .btn.live{ box-shadow:inset 0 0 0 2px var(--ink); }
+.btn.beat{ background:var(--ink); color:var(--ink-on); }
 @media (max-width:560px){
   .btn .lbl{ display:none; } .btn{ padding:0 12px; } .btn.primary{ padding:0 16px; }
   .brand{ order:-1; flex:1 1 100%; flex-direction:row; align-items:baseline; justify-content:space-between; margin-left:0; gap:10px; }
@@ -226,6 +227,11 @@ select{
     <input id="loop" type="range" min="6" max="90" step="1" value="45">
   </div>
   <div class="row">
+    <div class="head"><label for="bpm">BPM</label><output id="bpmOut">96</output></div>
+    <input id="bpm" type="range" min="40" max="180" step="1" value="96">
+    <label class="switch" style="margin-top:8px"><input id="bpmSyncChk" type="checkbox"><span>Il BPM governa tutto (droni, arpeggio, campane, pad)</span></label>
+  </div>
+  <div class="row">
     <div class="head"><label>Regione di loop</label><output id="regOut">intera lavagna</output></div>
     <button id="btnReg" class="btn wide" type="button">Loop sull'intera lavagna</button>
   </div>
@@ -285,7 +291,8 @@ select{
       <li><b>Pad</b> (verde): note lunghe e morbide dell'accordo.</li>
       <li><b>Magnete</b>: attiva una griglia nell'area di disegno; i tratti si agganciano alle colonne e alle note della scala, per linee dritte e precise.</li>
       <li><b>Striscia in basso</b>: il ritmo. Ogni riga è uno strumento (bongo alto, bongo basso, legno, marimba, vetro). Tocca per mettere un colpo, trascina per una serie regolare. I colpi si agganciano alla griglia e si ripetono identici a ogni giro. Lo spessore sceglie l'intensità.</li>
-      <li><b>Ritmo</b> (in alto): un piccolo step sequencer sempre disponibile, con 4 o 8 passi a scelta. Tocca le celle per accendere o spegnere un colpo: la sequenza si ripete a ogni accordo (ogni quarto della lavagna), quindi resta sempre in sincrono, anche loopando solo una regione.</li>
+      <li><b>Ritmo</b> (in alto): un piccolo step sequencer sempre disponibile, con 4 o 8 passi a scelta. Tocca le celle per accendere o spegnere un colpo: il suo orologio segue sempre il BPM impostato nelle Impostazioni, e ogni colpo suona con l'accordo che la playhead sta attraversando in quel momento.</li>
+      <li><b>Il BPM governa tutto</b>: se attivo nelle Impostazioni, anche la durata della lavagna deriva dal BPM (un giro dura 4 battute), così droni, arpeggio, campane e pad restano sempre in sincrono col ritmo.</li>
           <li><b>Barra del loop</b> (in cima alla lavagna): trascina le due maniglie per loopare solo una regione, la zona blu per spostarla, doppio tap per tornare all'intera lavagna. La velocità resta costante: una regione più corta dura meno.</li>
     </ul>
     <p style="margin:10px 0 0">Sopra la striscia le note sono acute in alto e gravi in basso. Bongo, legno e marimba si accordano da soli con l'accordo del quarto di lavagna in cui cadono.</p>
@@ -321,30 +328,19 @@ const LANES = ['Bongo alto','Bongo basso','Legno','Marimba','Vetro'];
 const NL = LANES.length;
 const KEY = 'lavagna-sonora-v2';
 
-// step sequencer minimale: voci eteree, celle on/off toccate a mano
+// step sequencer minimale: voci eteree, celle on/off toccate a mano, orologio proprio in BPM
 const STEP_VOICES = [['lo','Basso'], ['hi','Alto'], ['wood','Legno'], ['glass','Vetro']];
 const STEP_COUNTS = [4, 8];
-function buildRhythm() {
-  const R = S.rhythm, ev = [];
-  if (R.on) {
-    for (let v = 0; v < STEP_VOICES.length; v++) {
-      const [id] = STEP_VOICES[v], row = R.grid[id];
-      if (!row) continue;
-      for (let st = 0; st < R.steps; st++) if (row[st]) {
-        // la sequenza si ripete a ogni accordo (ogni quarto della lavagna)
-        for (let q = 0; q < 4; q++) ev.push({ x: q / 4 + st / (4 * R.steps), v: id, t: 0.55 + Math.random() * 0.25 });
-      }
-    }
-  }
-  S.rhythmEvents = ev;
-}
+// 4 passi = un quarto a passo, 8 passi = un ottavo: un giro della griglia dura sempre una battuta a 4/4
+function stepDurMs() { return (60000 / S.bpm) * (4 / S.rhythm.steps); }
 
 const S = {
   strokes: [], tool: 0, thick: 8,
   playing: false, phase: 0, loopSec: 45, loops: 0,
   rootSel: 'rand', modeSel: 'rand', evo: 4, steps: 64,
   volume: 0.7, reverb: 0.6, noteGrid: true, mix: { drone: 1, arp: 1, bell: 1, pad: 1, perc: 1, rhythm: 0.45 },
-  rhythm: { on: false, steps: 8, grid: {} }, rhythmEvents: [],
+  bpmSync: false,
+  rhythm: { on: false, steps: 8, grid: {}, step: 0, next: 0 }, bpm: 96,
   snap: { on: false, density: 16 },
   loopA: 0, loopB: 1,
   root: 0, mode: 0, prog: PROGS[0], scalePcs: new Set(), scaleNotes: [], sections: []
@@ -470,13 +466,7 @@ function drawBase() {
   c.fillStyle = 'rgba(120,90,210,0.055)'; c.fillRect(0, sy, cw, sh);
   c.fillStyle = 'rgba(120,90,210,0.4)'; c.fillRect(0, Math.round(sy), cw, 1);
   for (let l = 1; l < NL; l++) { c.fillStyle = 'rgba(120,90,210,0.14)'; c.fillRect(0, Math.round(sy + l * lh), cw, 1); }
-  if (S.rhythm.on) {
-    for (let q = 0; q < 4; q++) for (let k = 0; k < S.rhythm.steps; k++) {
-      const x = Math.round(cw * (q / 4 + k / (4 * S.rhythm.steps)));
-      c.fillStyle = 'rgba(120,90,210,0.55)';
-      c.fillRect(x, sy - (k === 0 ? 13 : 9), 1, k === 0 ? 13 : 9);
-    }
-  }
+
   if (S.steps > 0) {
     const every = Math.max(1, S.steps / 32);
     for (let k = 1; k < S.steps; k++) {
@@ -731,15 +721,33 @@ function hitPerc(lane, t, x) {
   else if (lane === 3) marimba(sec.mar[Math.floor(x * 32) % sec.mar.length], t);
   else glass(sec.perc[Math.floor(x * 32) % sec.perc.length], t);
 }
-function hitRhythm(ev) {
-  const sec = S.sections[sectionAt(ev.x)];
+function hitRhythm(voice, t) {
+  const sec = S.sections[sectionAt(S.phase)];
   const lo = snap(sec.chord, 53);
   let hi = snap(sec.chord, 62);
   if (hi <= lo) hi = sec.chord.find(m => m > lo) || lo + 7;
-  if (ev.v === 'lo') bongo(lo, ev.t, false, 'rhythm');
-  else if (ev.v === 'hi') bongo(hi, ev.t, true, 'rhythm');
-  else if (ev.v === 'wood') wood(snap(sec.chord, 79), ev.t, 'rhythm');
-  else tone('rhythm', midiHz(sec.perc[Math.floor(ev.x * 32) % sec.perc.length]), [[1,1,1],[2.9,0.2,0.35],[4.1,0.08,0.2]], (0.06 + 0.12 * ev.t), 0.006, 2.6);
+  if (voice === 'lo') bongo(lo, t, false, 'rhythm');
+  else if (voice === 'hi') bongo(hi, t, true, 'rhythm');
+  else if (voice === 'wood') wood(snap(sec.chord, 79), t, 'rhythm');
+  else tone('rhythm', midiHz(sec.perc[Math.floor(S.phase * 32) % sec.perc.length]), [[1,1,1],[2.9,0.2,0.35],[4.1,0.08,0.2]], (0.06 + 0.12 * t), 0.006, 2.6);
+}
+// orologio del ritmo: passi reali in BPM, indipendenti dalla velocità della playhead
+function stepRhythm(now) {
+  const R = S.rhythm;
+  if (!R.next) R.next = now;
+  let flashed = false;
+  while (now >= R.next) {
+    for (const [id] of STEP_VOICES) {
+      const row = R.grid[id];
+      if (row && row[R.step]) { hitRhythm(id, 0.55 + Math.random() * 0.25); flashed = true; }
+    }
+    R.step = (R.step + 1) % R.steps;
+    R.next += stepDurMs();
+  }
+  if (flashed) {
+    btnRh.classList.add('beat');
+    clearTimeout(stepRhythm._t); stepRhythm._t = setTimeout(() => btnRh.classList.remove('beat'), 110);
+  }
 }
 
 // drone: voce tenuta che scivola tra le note
@@ -840,7 +848,6 @@ function killStroke(st) { if (st.voice) { droneStop(st.voice); st.voice = null; 
 
 /* ---------- motore: playhead, eventi, gate ---------- */
 function processEvents(prev, cur) {
-  if (S.rhythm.on) for (const ev of S.rhythmEvents) if (ev.x > prev && ev.x <= cur) hitRhythm(ev);
   for (const st of S.strokes) {
     if (st.mode !== 'bell' && st.mode !== 'pad' && st.mode !== 'perc') continue;
     for (const ev of st.events) {
@@ -907,6 +914,7 @@ function frame(now) {
     } else processEvents(prev, cur);
     S.phase = cur;
     updateGates(cur, now);
+    if (S.rhythm.on) stepRhythm(now);
   }
   drawFx(now);
   requestAnimationFrame(frame);
@@ -935,6 +943,7 @@ function play() {
   lockScreen();
   if (A.ctx.state !== 'running') A.ctx.resume().catch(() => {});
   S.playing = true; S.phase = S.loopA - 1e-6; S.loops = 0; lastT = performance.now();
+  S.rhythm.step = 0; S.rhythm.next = performance.now();
   for (const st of S.strokes) st.active = false;
   ui();
 }
@@ -1010,11 +1019,17 @@ $('#modeSel').addEventListener('change', e => {
 $('#btnReroll').addEventListener('click', () => { reroll(); drawBase(); });
 $('#evoSel').addEventListener('change', e => { S.evo = +e.target.value; save(); });
 $('#stepSel').addEventListener('change', e => { S.steps = +e.target.value; drawBase(); save(); });
+function bpmLoopSec() { return clamp(960 / S.bpm, 6, 90); }   // 4 battute a 4/4 al BPM impostato
 function setLoop(v, noSave) {
-  S.loopSec = clamp(v, 6, 90);
+  S.loopSec = S.bpmSync ? bpmLoopSec() : clamp(v, 6, 90);
   $('#loop').value = S.loopSec;
-  $('#loopOut').textContent = S.loopSec + ' s';
+  $('#loopOut').textContent = (Math.round(S.loopSec * 10) / 10) + ' s';
   updateLoopUI(); rhythmUI(); if (!noSave) save();
+}
+function setBpmSync(on) {
+  S.bpmSync = on;
+  $('#bpmSyncChk').checked = on; $('#loop').disabled = on;
+  setLoop(on ? bpmLoopSec() : S.loopSec);
 }
 $('#loop').addEventListener('input', e => setLoop(+e.target.value));
 
@@ -1055,17 +1070,21 @@ function rhythmUI() {
   $('#rhOn').checked = R.on; btnRh.classList.toggle('live', R.on);
   document.querySelectorAll('#rhSteps .cb').forEach(b => b.setAttribute('aria-pressed', String(+b.dataset.n === R.steps)));
   document.querySelectorAll('#rhGrid .rh-cell').forEach(b => b.classList.toggle('on', !!rhCell(b.dataset.v, +b.dataset.st)));
-  const stepS = (S.loopSec / 4) / R.steps;
-  $('#rhInfo').textContent = 'un passo ogni ' + stepS.toFixed(2).replace('.', ',') +
-    ' s: la sequenza si ripete a ogni accordo, quindi 4 volte per giro.';
+  const note = R.steps === 4 ? 'un quarto' : 'un ottavo';
+  $('#rhInfo').textContent = R.steps + ' passi (' + note + ') a ' + S.bpm + ' BPM, un giro della griglia dura una battuta.';
 }
-function rhythmChanged() { buildRhythm(); resnapLoop(); rhythmUI(); applyMix(); drawBase(); save(); }
+function rhythmChanged() { resnapLoop(); rhythmUI(); applyMix(); drawBase(); save(); }
 STEP_COUNTS.forEach(n => {
   const b = document.createElement('button'); b.type = 'button'; b.className = 'cb'; b.dataset.n = n; b.textContent = n;
-  b.addEventListener('click', () => { S.rhythm.steps = n; buildRhythmGrid(); rhythmChanged(); });
+  b.addEventListener('click', () => { S.rhythm.steps = n; S.rhythm.step = 0; buildRhythmGrid(); rhythmChanged(); });
   $('#rhSteps').appendChild(b);
 });
-$('#rhOn').addEventListener('change', e => { S.rhythm.on = e.target.checked; rhythmChanged(); });
+$('#rhOn').addEventListener('change', e => { S.rhythm.on = e.target.checked; if (S.playing) S.rhythm.next = performance.now(); rhythmChanged(); });
+$('#bpm').addEventListener('input', e => {
+  S.bpm = +e.target.value; $('#bpmOut').textContent = S.bpm;
+  if (S.bpmSync) setLoop(bpmLoopSec()); else { rhythmUI(); save(); }
+});
+$('#bpmSyncChk').addEventListener('change', e => setBpmSync(e.target.checked));
 document.addEventListener('keydown', e => { if (e.key === 'Escape') { toggleRhythm(false); openSheet(false); } });
 $('#vol').addEventListener('input', e => {
   S.volume = e.target.value / 100;
@@ -1090,7 +1109,7 @@ for (const [k, label] of MIX_CH) {
 /* ---------- disegno con il puntatore ---------- */
 /* regione di loop: due maniglie sulla barra in cima */
 let loopDrag = null, lastRulerTap = 0;
-function loopStep() { return S.rhythm.on ? 1 / (4 * S.rhythm.steps) : 1 / 16; }
+function loopStep() { return S.snap.on ? Math.min(1 / 8, 1 / S.snap.density) : 1 / 16; }
 function snapLoop(v) { const st = loopStep(); return clamp(Math.round(v / st) * st, 0, 1); }
 function setLoopRegion(a, b) {
   const st = loopStep();
@@ -1239,7 +1258,7 @@ function save() {
     try {
       localStorage.setItem(KEY, JSON.stringify({
         v: 2,
-        set: { loopSec: S.loopSec, rootSel: S.rootSel, modeSel: S.modeSel, evo: S.evo, steps: S.steps, volume: S.volume, reverb: S.reverb, noteGrid: S.noteGrid, thick: S.thick, tool: S.tool, mix: S.mix, rhythm: S.rhythm, loop: [S.loopA, S.loopB], snap: S.snap },
+        set: { loopSec: S.loopSec, rootSel: S.rootSel, modeSel: S.modeSel, evo: S.evo, steps: S.steps, volume: S.volume, reverb: S.reverb, noteGrid: S.noteGrid, thick: S.thick, tool: S.tool, mix: S.mix, rhythm: { on: S.rhythm.on, steps: S.rhythm.steps, grid: S.rhythm.grid }, bpm: S.bpm, bpmSync: S.bpmSync, loop: [S.loopA, S.loopB], snap: S.snap },
         strokes: S.strokes.map(st => st.mode === 'perc'
           ? { c: st.color, e: st.events.map(v => [+v.x.toFixed(4), v.lane, +v.t.toFixed(2)]) }
           : { c: st.color, p: st.pts.map(p => [+p.x.toFixed(4), +p.y.toFixed(4), +p.t.toFixed(2)]) })
@@ -1263,6 +1282,8 @@ function load() {
       if (typeof s.snap.on === 'boolean') S.snap.on = s.snap.on;
       if ([8, 16, 32].includes(s.snap.density)) S.snap.density = s.snap.density;
     }
+    if (typeof s.bpm === 'number') S.bpm = clamp(Math.round(s.bpm), 40, 180);
+    if (typeof s.bpmSync === 'boolean') S.bpmSync = s.bpmSync;
     if (typeof s.thick === 'number') S.thick = clamp(s.thick, 2, 28);
     if (s.tool === 'e' || [0, 1, 2, 3].includes(s.tool)) S.tool = s.tool;
     if (s.mix && typeof s.mix === 'object') for (const [k] of MIX_CH) if (typeof s.mix[k] === 'number') S.mix[k] = clamp(s.mix[k], 0, 1.5);
@@ -1291,7 +1312,9 @@ function load() {
   } catch (_) {}
 }
 function syncControls() {
-  setLoop(S.loopSec, true);
+  $('#bpm').value = S.bpm; $('#bpmOut').textContent = S.bpm;
+  $('#bpmSyncChk').checked = S.bpmSync; $('#loop').disabled = S.bpmSync;
+  setLoop(S.bpmSync ? bpmLoopSec() : S.loopSec, true);
   $('#rootSel').value = String(S.rootSel); $('#modeSel').value = String(S.modeSel);
   $('#evoSel').value = String(S.evo); $('#stepSel').value = String(S.steps);
   $('#vol').value = Math.round(S.volume * 100); $('#rev').value = Math.round(S.reverb * 100);
@@ -1307,7 +1330,6 @@ resize();
 load();
 syncControls();
 buildRhythmGrid();
-buildRhythm();
 S.phase = S.loopA;
 rhythmUI();
 updateLoopUI();
